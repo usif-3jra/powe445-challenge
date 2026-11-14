@@ -35,7 +35,7 @@ const footer = () => `<div class="foot">POWE445 — CONTROL SYSTEMS II · ${C.VE
 
 /* ================================================================== boot */
 (async function boot() {
-  try { S.be = await createBackend(); }
+  try { S.be = await createBackend('student'); }
   catch (e) { app.innerHTML = `<div class="login-wrap"><div class="msg bad">Could not connect to the challenge server: ${esc(e.message)}</div></div>`; return; }
   S.be.watchConfig(c => { S.cfg = C.mergeConfig(c); if (S.view === 'login') renderLogin(); if (S.view === 'main') refreshChrome(); });
   const uid = await S.be.studentResume();

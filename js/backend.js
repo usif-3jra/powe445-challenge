@@ -5,16 +5,18 @@ const FB_VERSION = '10.12.2';
 export const isFirebaseConfigured = () =>
   !!(FIREBASE_CONFIG && FIREBASE_CONFIG.apiKey && !/^PASTE/.test(FIREBASE_CONFIG.apiKey) && FIREBASE_CONFIG.databaseURL);
 
-export async function createBackend() {
-  return isFirebaseConfigured() ? firebaseBackend() : localBackend();
+// role 'admin' runs on its own Firebase app instance, so its sign-in never collides with a
+// student session opened in another tab of the same browser (separate auth persistence).
+export async function createBackend(role = 'student') {
+  return isFirebaseConfigured() ? firebaseBackend(role) : localBackend();
 }
 
 /* ------------------------------------------------------------------ Firebase */
-async function firebaseBackend() {
+async function firebaseBackend(role) {
   const base = `https://www.gstatic.com/firebasejs/${FB_VERSION}/`;
   const [{ initializeApp }, A, D] = await Promise.all([
     import(base + 'firebase-app.js'), import(base + 'firebase-auth.js'), import(base + 'firebase-database.js')]);
-  const app = initializeApp(FIREBASE_CONFIG);
+  const app = role === 'admin' ? initializeApp(FIREBASE_CONFIG, 'powe445-admin') : initializeApp(FIREBASE_CONFIG);
   const auth = A.getAuth(app), db = D.getDatabase(app);
   const ref = p => D.ref(db, p);
   const authReady = new Promise(res => { const un = A.onAuthStateChanged(auth, u => { un(); res(u); }); });
@@ -44,7 +46,9 @@ async function firebaseBackend() {
     },
     async adminResume() { await authReady; const u = auth.currentUser; return u && !u.isAnonymous && (await isAdmin(u.uid)) ? u.uid : null; },
     adminSignOut: () => A.signOut(auth),
-    watchStudents: cb => D.onValue(ref('students'), s => cb(s.val() || {}), e => console.error(e)),
+    watchStudents: (cb, onErr) => D.onValue(ref('students'), s => cb(s.val() || {}), e => { console.error(e); onErr && onErr(e); }),
+    getStudents: async () => (await D.get(ref('students'))).val() || {},
+    onAuthChange: cb => A.onAuthStateChanged(auth, u => cb(u && !u.isAnonymous ? u.uid : null)),
     setStatus: (uid, status) => D.set(ref(`students/${uid}/status`), status),
     setOverride: (uid, key, val) => D.set(ref(`students/${uid}/overrides/${key}`), val === null || val === '' ? null : Number(val)),
     saveConfig: cfg => D.set(ref('config'), cfg),
@@ -95,6 +99,8 @@ function localBackend() {
     async adminResume() { return sessionStorage.getItem('powe445_local_admin') ? 'local-admin' : null; },
     async adminSignOut() { sessionStorage.removeItem('powe445_local_admin'); },
     watchStudents: cb => watch('students', v => cb(v || {})),
+    getStudents: async () => get(load(), 'students') || {},
+    onAuthChange: () => () => {},
     setStatus: (uid, status) => write(`students/${uid}/status`, status),
     setOverride: (uid, key, val) => write(`students/${uid}/overrides/${key}`, val === null || val === '' ? null : Number(val)),
     saveConfig: cfg => write('config', cfg),

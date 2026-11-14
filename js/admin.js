@@ -10,7 +10,7 @@ const online = r => r.presence && Date.now() - r.presence.lastSeen < 75000;
 const foot = `<div class="foot">POWE445 — CONTROL SYSTEMS II · CONTROL ROOM · ${C.VERSION} · CREATED BY YOUSSEF AJRA</div>`;
 
 (async function boot() {
-  try { A.be = await createBackend(); } catch (e) { app.innerHTML = `<div class="login-wrap"><div class="msg bad">${esc(e.message)}</div></div>`; return; }
+  try { A.be = await createBackend('admin'); } catch (e) { app.innerHTML = `<div class="login-wrap"><div class="msg bad">${esc(e.message)}</div></div>`; return; }
   const uid = await A.be.adminResume();
   uid ? start() : renderLogin();
 })();
@@ -32,17 +32,43 @@ function start() {
   app.innerHTML = `<header class="topbar">${UI.logoHTML()}<div class="brand"><span class="course">POWE445 · CONTROL SYSTEMS II</span><span class="title">Control Room — Self-Balancing Robot Challenge</span></div>
     <div class="who"><b>Dr. Youssef Ajra</b><span class="pill ${A.be.mode === 'local' ? 'warn' : 'ok'}">${A.be.mode === 'local' ? 'LOCAL DEMO' : 'FIREBASE LIVE'}</span> <button class="btn sm" id="out">Sign out</button></div></header>
     <div class="admin-shell"><div class="cards" id="cards"></div>
+      <div class="row" style="margin:-6px 0 14px"><span class="mono small" id="live"></span><span class="grow"></span><button class="btn sm" id="refresh">⟳ Refresh</button></div>
       <div class="tabs" id="tabs"></div><section class="sheet" id="pane" style="margin-top:0"></section></div>${foot}`;
   $('#out').onclick = async () => { await A.be.adminSignOut(); location.reload(); };
-  A.be.watchConfig(c => { A.cfgRaw = c; A.cfg = C.mergeConfig(c); if (!c) A.be.saveConfig(A.cfg).catch(() => {}); if (A.tab !== 'settings' || !A.editingSettings) render(); });
-  A.be.watchStudents(s => {
-    A.students = s || {};
-    const typing = document.activeElement && document.activeElement.classList.contains('ov');
-    if (A.tab === 'settings' || A.tab === 'key' || typing) { renderCards(); if (typing) document.activeElement.addEventListener('blur', () => setTimeout(render, 50), { once: true }); }
-    else render();
-  });
-  setInterval(() => { if (A.tab === 'students' || A.tab === 'wait') renderCards(); }, 15000);
+  $('#refresh').onclick = () => refreshNow(true);
+  A.be.watchConfig(c => { A.cfgRaw = c; A.cfg = C.mergeConfig(c); if (!c) A.be.saveConfig(A.cfg).catch(() => {}); if (A.tab !== 'settings' || !A.editingSettings) render(true); });
+  subscribe();
+  // if the admin session ends in another tab, say so instead of silently freezing
+  A.be.onAuthChange(uid => { if (!uid) setLive(false, 'Admin session ended (signed out in another tab). Sign in again.'); });
+  setInterval(() => { renderCards(); updateOnline(); }, 15000);
+  setInterval(() => { if (!A.live) refreshNow(false); }, 20000);   // self-heal a dropped listener
 }
+function subscribe() {
+  if (A.unsubS) { try { A.unsubS(); } catch {} }
+  A.unsubS = A.be.watchStudents(s => { A.students = s || {}; setLive(true); onData(); },
+    e => setLive(false, 'Live connection lost (' + (e && e.code || e && e.message || 'error') + '). Press Refresh.'));
+}
+async function refreshNow(manual) {
+  try { A.students = await A.be.getStudents(); setLive(true); subscribe(); onData(true); if (manual) UI.toast('Refreshed', 'ok'); }
+  catch (e) { setLive(false, 'Refresh failed: ' + (e.code || e.message) + ' — sign in again if this persists.'); if (manual) UI.toast('Refresh failed', 'bad'); }
+}
+function setLive(ok, msg) {
+  A.live = ok; const el = $('#live'); if (!el) return;
+  el.innerHTML = ok ? `<span class="online on"></span>&nbsp; LIVE · updated ${new Date().toLocaleTimeString()}` : `<span class="online"></span>&nbsp; <span style="color:var(--bad)">${esc(msg || 'offline')}</span>`;
+}
+function onData(force) {
+  const typing = document.activeElement && document.activeElement.classList.contains('ov');
+  if (A.tab === 'settings' || A.tab === 'key' || typing) {
+    renderCards(); renderTabs();
+    if (typing && !A.blurHook) { A.blurHook = true; document.activeElement.addEventListener('blur', () => { A.blurHook = false; setTimeout(() => render(true), 50); }, { once: true }); }
+  } else render(force);
+}
+// signature of what the current tab shows — the pane is rebuilt only when it changes (no flicker)
+function paneSig() {
+  const L = list().map(r => ({ u: r.uid, p: r.profile, s: r.status, w: A.tab === 'wait' ? null : r.work, o: r.overrides, st: r.presence && r.presence.stage }));
+  return A.tab + '|' + JSON.stringify(L) + '|' + JSON.stringify(A.cfg);
+}
+function updateOnline() { $$('[data-online]').forEach(d => { const r = A.students[d.dataset.online]; d.classList.toggle('on', !!(r && online(r))); }); }
 const list = () => Object.entries(A.students).filter(([, r]) => r && r.profile).map(([uid, r]) => ({ uid, ...r, status: r.status || 'pending' }));
 function dupIds() { const c = {}; list().forEach(r => { c[r.profile.id] = (c[r.profile.id] || 0) + 1; }); return c; }
 
@@ -54,12 +80,19 @@ function renderCards() {
     card('SESSION', `<span class="pill ${A.cfg.sessionOpen ? 'ok' : 'bad'}" style="font-size:14px;display:inline-block">${A.cfg.sessionOpen ? 'OPEN' : 'CLOSED'}</span> <button class="btn sm" id="tog">${A.cfg.sessionOpen ? 'close' : 'open'}</button>`);
   $('#tog').onclick = () => A.be.saveConfig({ ...A.cfg, sessionOpen: !A.cfg.sessionOpen });
 }
-function render() {
-  renderCards();
+function renderTabs() {
   const tabs = [['wait', `Waiting room (${list().filter(r => r.status === 'pending').length})`], ['students', 'Students & marks'], ['board', 'Leaderboard'], ['settings', 'Settings & marks'], ['key', 'Answer key']];
   $('#tabs').innerHTML = tabs.map(([k, t]) => `<button class="tab ${A.tab === k ? 'active' : ''}" data-t="${k}">${t}</button>`).join('');
-  $$('#tabs .tab').forEach(b => b.onclick = () => { A.tab = b.dataset.t; A.editingSettings = false; render(); });
+  $$('#tabs .tab').forEach(b => b.onclick = () => { A.tab = b.dataset.t; A.editingSettings = false; render(true); });
+}
+function render(force) {
+  renderCards(); renderTabs();
+  const sig = paneSig();
+  if (!force && sig === A.lastSig) { updateOnline(); return; }
+  A.lastSig = sig;
+  const y = window.scrollY;
   ({ wait: paneWait, students: paneStudents, board: paneBoard, settings: paneSettings, key: paneKey })[A.tab]($('#pane'));
+  window.scrollTo(0, y); updateOnline();
 }
 
 /* ------------------------------------------------------------ waiting room */
@@ -88,7 +121,7 @@ function paneStudents(el) {
     <div class="tbl-wrap"><table class="adm"><tr><th></th><th>NAME</th><th>ID</th><th>STAGE</th>${Q.map(q => `<th title="${esc(q.label)}">${q.key.toUpperCase()}<br>/${fmtM(A.cfg.weights[q.key])}</th>`).join('')}<th>TOTAL</th><th>%</th><th>R²</th><th>INDEX</th><th>CERT</th><th></th></tr>
     ${L.map(r => {
       const res = (r.work && r.work.results) || {}; const mk = C.computeMarks(res, r.overrides, A.cfg);
-      return `<tr><td><span class="online ${online(r) ? 'on' : ''}" title="${r.presence ? new Date(r.presence.lastSeen).toLocaleTimeString() : 'never'}"></span></td>
+      return `<tr><td><span class="online ${online(r) ? 'on' : ''}" data-online="${r.uid}" title="${r.presence ? new Date(r.presence.lastSeen).toLocaleTimeString() : 'never'}"></span></td>
         <td>${esc(r.profile.name)}</td><td class="mono ${d[r.profile.id] > 1 ? 'dup' : ''}">${esc(r.profile.id)}</td><td class="num">${r.presence ? r.presence.stage || '—' : '—'}</td>
         ${mk.rows.map(q => `<td class="num" style="background:${q.done ? (q.correct ? '#eef8f3' : '#fdf0ee') : '#fff'}"><input class="ov" data-u="${r.uid}" data-k="${q.key}" value="${q.override ?? ''}" placeholder="${fmtM(q.auto)}" title="attempts: ${(res[q.key] || {}).attempts || 0}"></td>`).join('')}
         <td class="num"><b>${fmtM(mk.earned)}</b></td><td class="num">${mk.pct.toFixed(1)}</td><td class="num">${res.ml && res.ml.r2 !== undefined ? res.ml.r2.toFixed(4) : '—'}</td>
@@ -96,7 +129,7 @@ function paneStudents(el) {
         <td style="white-space:nowrap"><button class="btn sm" data-key="${esc(r.profile.id)}">Key</button> <button class="btn sm" data-reset="${r.uid}">Reset</button> <button class="btn sm bad" data-kick="${r.uid}">Remove</button></td></tr>`;
     }).join('') || `<tr><td colspan="${Q.length + 11}" class="muted">No admitted students yet.</td></tr>`}</table></div>`;
   $$('input.ov', el).forEach(i => i.onchange = () => { const v = i.value.trim(); if (v !== '' && !isFinite(Number(v))) { i.value = ''; return; } A.be.setOverride(i.dataset.u, i.dataset.k, v === '' ? null : Number(v)); });
-  $$('[data-key]', el).forEach(b => b.onclick = () => { A.tab = 'key'; render(); $('#kid').value = b.dataset.key; $('#kgo').click(); });
+  $$('[data-key]', el).forEach(b => b.onclick = () => { A.tab = 'key'; render(true); $('#kid').value = b.dataset.key; $('#kgo').click(); });
   $$('[data-reset]', el).forEach(b => b.onclick = () => { if (confirm('Erase all work of this student (answers, marks, certificate)?')) A.be.resetWork(b.dataset.reset); });
   $$('[data-kick]', el).forEach(b => b.onclick = () => { if (confirm('Remove this student from the session?')) A.be.setStatus(b.dataset.kick, 'rejected'); });
   $('#csv', el).onclick = () => {
@@ -148,7 +181,7 @@ function paneSettings(el) {
     return c;
   };
   $('#sv', el).onclick = async () => { await A.be.saveConfig(collect()); A.editingSettings = false; $('#svm', el).textContent = 'saved ✓'; UI.toast('Settings saved', 'ok'); };
-  $('#df', el).onclick = async () => { if (confirm('Restore all default settings?')) { await A.be.saveConfig({ ...C.DEFAULT_CONFIG, sessionOpen: A.cfg.sessionOpen }); A.editingSettings = false; render(); } };
+  $('#df', el).onclick = async () => { if (confirm('Restore all default settings?')) { await A.be.saveConfig({ ...C.DEFAULT_CONFIG, sessionOpen: A.cfg.sessionOpen }); A.editingSettings = false; render(true); } };
   $('#tst', el).onclick = () => {
     const v = C.validateId($('#tid', el).value); if (!v.ok) { $('#tstres', el).innerHTML = `<div class="msg bad">${v.msg}</div>`; return; }
     const cc = collect(); const p = C.generateParams(v.value), sc = C.scenario(cc.disturbance);
