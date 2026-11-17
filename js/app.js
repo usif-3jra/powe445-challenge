@@ -158,8 +158,10 @@ function refreshChrome() {
     return `<button class="step ${S.stage === s.n ? 'active' : ''} ${lk ? 'locked' : ''} ${dn ? 'done' : ''}" data-n="${s.n}" ${lk ? 'disabled' : ''}>
       <span class="num">${dn ? '✓' : s.n}</span><span>${s.t}<small>${s.d}</small></span></button>`;
   }).join('') + `<div class="scorebox"><div class="muted">MARKS</div><div class="big">${fmtM(mk.earned)} / ${fmtM(mk.total)}</div><div>${mk.pct.toFixed(1)} %</div><div class="bar"><i style="width:${mk.pct}%"></i></div>
+    <button class="btn sm" id="sbrep" style="margin-top:10px;width:100%;justify-content:center">⬇ Full report (PDF)</button>
     <div class="small muted" style="margin-top:8px">Robot ID-seed: ${esc(S.rec.profile.id)}<br>Parameters are unique to you.</div></div>`;
   $$('#stepper .step').forEach(b => b.onclick = () => { if (!b.disabled) go(+b.dataset.n); });
+  $('#sbrep').onclick = () => openReport();
   $('#sheetno').textContent = `${S.stage} / 6`;
 }
 const fmtM = x => (Math.round(x * 10) / 10).toString();
@@ -448,7 +450,7 @@ function stage4(el) {
       localStorage.setItem(modelKey(), JSON.stringify(j));
       const prev = res('ml'); const ok = v.r2 >= S.cfg.r2Min;
       const best = !prev.done || v.r2 > (prev.r2 ?? -Infinity);
-      await save({ 'results/ml': { done: true, correct: !!(prev.correct || ok), r2: best ? v.r2 : prev.r2, rmse: best ? v.rmse : prev.rmse, modelType: j.modelType || 'unknown', lastR2: v.r2, attempts: (prev.attempts || 0) + 1, at: Date.now() } });
+      await save({ 'results/ml': { done: true, correct: !!(prev.correct || ok), r2: best ? v.r2 : prev.r2, rmse: best ? v.rmse : prev.rmse, modelType: j.modelType || 'unknown', lastR2: v.r2, attempts: (prev.attempts || 0) + 1, slice: best ? Report.packSlice(model) : (prev.slice || Report.packSlice(model)), at: Date.now() } });
       refreshChrome(); showRes({ r2: v.r2, rmse: v.rmse, modelType: j.modelType }, model);
       if (!$('[data-next="5"]', el) && unlocked(5)) { $('#mlres', el).insertAdjacentHTML('beforeend', `<div class="row" style="margin-top:10px">${nextBtn(5)}</div>`); wireNext(el); }
     } catch (err) { $('#mlres', el).innerHTML = `<div class="msg bad">✘ ${esc(err.message)}</div>`; }
@@ -500,6 +502,9 @@ function stage5(el) {
     const prev = res('sim');
     const rec = { done: true, correct: !!(prev.correct || v.pass), lastIndex: m.index, bestIndex: Math.max(prev.bestIndex ?? 0, v.pass ? m.index : 0), runs: (prev.runs || 0) + 1,
       last: { rms: m.rmsTiltDeg, max: m.maxTiltDeg, pos: m.rmsPosErr, fin: m.finalErr, fallen: m.fallen }, scenario: { mode: sc.mode, slopeDeg: sc.slopeDeg, pushN: sc.pushN }, model: model.meta.modelType || '', at: Date.now() };
+    const mm = { fallen: m.fallen, tFall: m.tFall, rmsTiltDeg: m.rmsTiltDeg, maxTiltDeg: m.maxTiltDeg, rmsPosErr: m.rmsPosErr, finalErr: m.finalErr, satPct: m.satPct, index: m.index };
+    rec.lastMetrics = mm; rec.trace = Report.packTrace(run.out);
+    rec.best = (v.pass && (!prev.best || m.index >= (prev.best.metrics.index || 0))) ? { metrics: mm, trace: rec.trace, at: Date.now() } : (prev.best || null);
     await save({ 'results/sim': rec });
     play(run, 'PI + ML'); showMetrics(m, 'Result — PI + ML block', v); refreshChrome();
     if (!$('[data-next="6"]', el) && unlocked(6)) { $('#simres', el).insertAdjacentHTML('beforeend', `<div class="row" style="margin-top:10px">${nextBtn(6)}</div>`); wireNext(el); }
@@ -519,7 +524,8 @@ function stage6(el) {
       ${mk.rows.map((r, i) => `<tr><td class="mono">${i + 1}</td><td>${esc(r.label)}</td><td>${r.done ? (r.correct ? '<span class="pill ok">correct</span>' : '<span class="pill bad">incorrect</span>') : '<span class="pill warn">pending</span>'}${r.override !== null ? ' <span class="pill info">adjusted by instructor</span>' : ''}</td><td class="num">${fmtM(r.earned)} / ${fmtM(r.weight)}</td></tr>`).join('')}
       <tr><td></td><td><b>Total</b></td><td></td><td class="num"><b>${fmtM(mk.earned)} / ${fmtM(mk.total)} (${mk.pct.toFixed(1)} %)</b></td></tr></table></div>
     <div class="row" style="margin-top:16px">${eligible ? `<button class="btn primary" id="gen">${cert ? 'VIEW CERTIFICATE' : 'CLAIM CERTIFICATE'}</button>` : '<div class="msg warn">The certificate requires a passed challenge run (stage 5).</div>'}
-      <button class="btn hidden" id="prt">🖶 PRINT / SAVE AS PDF</button></div>
+      <button class="btn hidden" id="prt">🖶 PRINT / SAVE AS PDF</button><button class="btn accent" id="rep">⬇ DOWNLOAD FULL REPORT (PDF)</button></div>
+    <p class="small muted">The report contains every step with your numbers: parameters, block-diagram reduction, G(s), CCF, ranks, eigenvalues, step response, ML validation and the challenge graphs. It opens in a new tab; choose “Save as PDF”.</p>
   </section>
   <section class="sheet hidden" id="certsheet"><div class="sheet-label">CERTIFICATE</div><div class="cert-scale"><div id="certificate"></div></div></section>`;
   const showCert = async c => {
@@ -533,4 +539,10 @@ function stage6(el) {
     showCert(c);
   };
   $('#prt', el).onclick = () => window.print();
+  $('#rep', el).onclick = () => openReport();
+}
+function openReport() {
+  const ml = res('ml');
+  if (ml.done && !ml.slice) { const m = loadModel(); if (m) save({ 'results/ml/slice': Report.packSlice(m) }); }
+  Report.open(S.rec, S.cfg);
 }

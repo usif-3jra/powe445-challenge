@@ -126,10 +126,11 @@ function paneStudents(el) {
         ${mk.rows.map(q => `<td class="num" style="background:${q.done ? (q.correct ? '#eef8f3' : '#fdf0ee') : '#fff'}"><input class="ov" data-u="${r.uid}" data-k="${q.key}" value="${q.override ?? ''}" placeholder="${fmtM(q.auto)}" title="attempts: ${(res[q.key] || {}).attempts || 0}"></td>`).join('')}
         <td class="num"><b>${fmtM(mk.earned)}</b></td><td class="num">${mk.pct.toFixed(1)}</td><td class="num">${res.ml && res.ml.r2 !== undefined ? res.ml.r2.toFixed(4) : '—'}</td>
         <td class="num">${res.sim && res.sim.bestIndex ? Number(res.sim.bestIndex).toFixed(1) : '—'}</td><td>${r.work && r.work.cert ? '<span class="pill ok">issued</span>' : ''}</td>
-        <td style="white-space:nowrap"><button class="btn sm" data-key="${esc(r.profile.id)}">Key</button> <button class="btn sm" data-reset="${r.uid}">Reset</button> <button class="btn sm bad" data-kick="${r.uid}">Remove</button></td></tr>`;
+        <td style="white-space:nowrap"><button class="btn sm" data-rep="${r.uid}">Report</button> <button class="btn sm" data-key="${esc(r.profile.id)}">Key</button> <button class="btn sm" data-reset="${r.uid}">Reset</button> <button class="btn sm bad" data-kick="${r.uid}">Remove</button></td></tr>`;
     }).join('') || `<tr><td colspan="${Q.length + 11}" class="muted">No admitted students yet.</td></tr>`}</table></div>`;
   $$('input.ov', el).forEach(i => i.onchange = () => { const v = i.value.trim(); if (v !== '' && !isFinite(Number(v))) { i.value = ''; return; } A.be.setOverride(i.dataset.u, i.dataset.k, v === '' ? null : Number(v)); });
   $$('[data-key]', el).forEach(b => b.onclick = () => { A.tab = 'key'; render(true); $('#kid').value = b.dataset.key; $('#kgo').click(); });
+  $$('[data-rep]', el).forEach(b => b.onclick = () => Report.open(A.students[b.dataset.rep], A.cfg));
   $$('[data-reset]', el).forEach(b => b.onclick = () => { if (confirm('Erase all work of this student (answers, marks, certificate)?')) A.be.resetWork(b.dataset.reset); });
   $$('[data-kick]', el).forEach(b => b.onclick = () => { if (confirm('Remove this student from the session?')) A.be.setStatus(b.dataset.kick, 'rejected'); });
   $('#csv', el).onclick = () => {
